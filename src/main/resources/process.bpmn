@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+             targetNamespace="http://camunda.org/leasing-auto">
+
+  <process id="procesLeasingAuto" name="Proces de Leasing Auto" isExecutable="true">
+
+    <!-- Start -->
+    <startEvent id="StartEvent_Leasing" name="Cerere de leasing primită"/>
+
+    <!-- User Task: Client completează cererea -->
+    <userTask id="UserTask_CompleteazaCerere" name="Completează cererea de leasing" camunda:assignee="client"/>
+
+    <!-- Parallel Gateway -->
+    <parallelGateway id="Gateway_VerificariParalele" name="Inițiere verificări paralele"/>
+
+    <!-- Service Task: Verifică scor de credit -->
+    <serviceTask id="ServiceTask_VerificaScorCredit" name="Verifică scor de credit" camunda:class="com.example.camunda.VerificaScorCreditDelegate"/>
+
+    <!-- Service Task: Verifică existența vehiculului -->
+    <serviceTask id="ServiceTask_VerificaVehicul" name="Verifică existența vehiculului" camunda:class="com.example.camunda.VerificaVehiculDelegate"/>
+
+    <!-- Subprocess: Validare documente -->
+    <subProcess id="SubProcess_ValidareDocumente" name="Validare documente client și vehicul">
+      <startEvent id="StartEvent_Subprocess" name="Start Validare Documente"/>
+      <userTask id="UserTask_ValidareDocumente" name="Verificare documente" camunda:assignee="operator_doc"/>
+      <intermediateCatchEvent id="MessageEvent_DocumenteLipsa" name="Așteaptă documente lipsă">
+        <messageEventDefinition messageRef="Message_DocumentePrimite"/>
+      </intermediateCatchEvent>
+      <endEvent id="EndEvent_Subprocess" name="Sfârșit Validare Documente"/>
+
+      <sequenceFlow id="subflow1" sourceRef="StartEvent_Subprocess" targetRef="UserTask_ValidareDocumente"/>
+      <sequenceFlow id="subflow2" sourceRef="UserTask_ValidareDocumente" targetRef="MessageEvent_DocumenteLipsa"/>
+      <sequenceFlow id="subflow3" sourceRef="MessageEvent_DocumenteLipsa" targetRef="EndEvent_Subprocess"/>
+    </subProcess>
+
+    <!-- Exclusive Gateway: Rezultate verificări -->
+    <exclusiveGateway id="Gateway_RezultatVerificari" name="Rezultate verificări"/>
+
+    <!-- Business Rule Task (DMN): Decizie automată -->
+    <businessRuleTask id="BusinessRuleTask_DecizieAutomata" name="Decizie automată de leasing" camunda:decisionRef="decizieLeasingAuto"/>
+
+    <!-- Exclusive Gateway: Rezultat evaluare -->
+    <exclusiveGateway id="Gateway_RezultatEvaluare" name="Rezultat evaluare automată"/>
+
+    <!-- User Task: Evaluare manuală -->
+    <userTask id="UserTask_EvaluareManuala" name="Evaluare manuală de către analist" camunda:assignee="analist"/>
+
+    <boundaryEvent id="BoundaryEvent_TimerEvaluare" attachedToRef="UserTask_EvaluareManuala">
+      <timerEventDefinition>
+        <timeDuration>PT72H</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+
+    <intermediateThrowEvent id="EscalationEvent_Manager" name="Escalare către manager">
+      <escalationEventDefinition escalationRef="Escalare_Manager"/>
+    </intermediateThrowEvent>
+
+    <!-- Exclusive Gateway: Decizie finală -->
+    <exclusiveGateway id="Gateway_DecizieFinala" name="Decizie finală"/>
+
+    <!-- End Events -->
+    <endEvent id="EndEvent_LeasingAprobat" name="Leasing acordat"/>
+    <endEvent id="EndEvent_LeasingRefuzat" name="Leasing respins"/>
+    <endEvent id="EndEvent_ProcesAbandonat" name="Cerere abandonată"/>
+
+    <!-- Sequence Flows -->
+    <sequenceFlow id="flow1" sourceRef="StartEvent_Leasing" targetRef="UserTask_CompleteazaCerere"/>
+    <sequenceFlow id="flow2" sourceRef="UserTask_CompleteazaCerere" targetRef="Gateway_VerificariParalele"/>
+    <sequenceFlow id="flow3" sourceRef="Gateway_VerificariParalele" targetRef="ServiceTask_VerificaScorCredit"/>
+    <sequenceFlow id="flow4" sourceRef="Gateway_VerificariParalele" targetRef="ServiceTask_VerificaVehicul"/>
+    <sequenceFlow id="flow5" sourceRef="Gateway_VerificariParalele" targetRef="SubProcess_ValidareDocumente"/>
+
+    <sequenceFlow id="flow6" sourceRef="ServiceTask_VerificaScorCredit" targetRef="Gateway_RezultatVerificari"/>
+    <sequenceFlow id="flow7" sourceRef="ServiceTask_VerificaVehicul" targetRef="Gateway_RezultatVerificari"/>
+    <sequenceFlow id="flow8" sourceRef="SubProcess_ValidareDocumente" targetRef="Gateway_RezultatVerificari"/>
+
+    <sequenceFlow id="flow9" sourceRef="Gateway_RezultatVerificari" targetRef="BusinessRuleTask_DecizieAutomata">
+      <conditionExpression xsi:type="tFormalExpression">${verificariOk == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flow10" sourceRef="Gateway_RezultatVerificari" targetRef="UserTask_EvaluareManuala">
+      <conditionExpression xsi:type="tFormalExpression">${verificariOk == false}</conditionExpression>
+    </sequenceFlow>
+
+    <sequenceFlow id="flow11" sourceRef="BusinessRuleTask_DecizieAutomata" targetRef="Gateway_RezultatEvaluare"/>
+    <sequenceFlow id="flow12" sourceRef="Gateway_RezultatEvaluare" targetRef="EndEvent_LeasingAprobat">
+      <conditionExpression xsi:type="tFormalExpression">${decizie == 'aprobat'}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flow13" sourceRef="Gateway_RezultatEvaluare" targetRef="UserTask_EvaluareManuala">
+      <conditionExpression xsi:type="tFormalExpression">${decizie == 'manual'}</conditionExpression>
+    </sequenceFlow>
+
+    <sequenceFlow id="flow14" sourceRef="UserTask_EvaluareManuala" targetRef="Gateway_DecizieFinala"/>
+    <sequenceFlow id="flow15" sourceRef="BoundaryEvent_TimerEvaluare" targetRef="EscalationEvent_Manager"/>
+    <sequenceFlow id="flow16" sourceRef="Gateway_DecizieFinala" targetRef="EndEvent_LeasingAprobat">
+      <conditionExpression xsi:type="tFormalExpression">${decizieFinala == 'aprobat'}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flow17" sourceRef="Gateway_DecizieFinala" targetRef="EndEvent_LeasingRefuzat">
+      <conditionExpression xsi:type="tFormalExpression">${decizieFinala == 'refuzat'}</conditionExpression>
+    </sequenceFlow>
+
+  </process>
+
+  <!-- Mesaje și Escalări -->
+  <message id="Message_DocumentePrimite" name="DocumentePrimite"/>
+  <escalation id="Escalare_Manager" name="Escalare către Manager"/>
+
+</definitions>
